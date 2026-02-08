@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Idealize Decoração | Consulta de Preços</title>
+  <style>
+    :root{
+      --bg:#ffffff;
+      --text:#111111;
+      --muted:#6b7280;
+      --border:#e5e7eb;
+      --card:#fafafa;
+      --focus:#111111;
+    }
+    *{ box-sizing:border-box; }
+    body{
+      margin:0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color:var(--text);
+      background:var(--bg);
+      line-height:1.35;
+    }
+    .wrap{
+      max-width:720px;
+      margin:0 auto;
+      padding:18px 14px 28px;
+    }
+    header{
+      display:flex;
+      justify-content:center;
+      padding:10px 0 16px;
+    }
+    header img{
+      max-width:220px;
+      width:55vw;
+      height:auto;
+      display:block;
+    }
+    .card{
+      border:1px solid var(--border);
+      background:var(--card);
+      border-radius:14px;
+      padding:16px;
+    }
+    h1{
+      font-size:18px;
+      margin:0 0 14px;
+      text-align:center;
+      font-weight:650;
+      letter-spacing:0.2px;
+    }
+    label{
+      display:block;
+      font-size:13px;
+      color:var(--muted);
+      margin:0 0 6px;
+    }
+    select{
+      width:100%;
+      padding:12px 12px;
+      border-radius:10px;
+      border:1px solid var(--border);
+      background:#fff;
+      font-size:16px;
+      outline:none;
+    }
+    select:focus{
+      border-color:var(--focus);
+      box-shadow:0 0 0 3px rgba(17,17,17,.08);
+    }
+    .result{
+      margin-top:14px;
+      padding:14px;
+      border-radius:12px;
+      background:#fff;
+      border:1px solid var(--border);
+      display:flex;
+      align-items:baseline;
+      justify-content:space-between;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    .result .k{
+      color:var(--muted);
+      font-size:13px;
+    }
+    .result .v{
+      font-size:22px;
+      font-weight:750;
+      letter-spacing:0.2px;
+    }
+    .hint{
+      margin-top:10px;
+      color:var(--muted);
+      font-size:12.5px;
+      text-align:center;
+    }
+    .error{
+      margin-top:10px;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid #fecaca;
+      background:#fff1f2;
+      color:#991b1b;
+      font-size:13px;
+      display:none;
+      white-space:pre-wrap;
+    }
+    footer{
+      margin-top:14px;
+      text-align:center;
+      color:var(--muted);
+      font-size:12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <img src="./logo.png" alt="Idealize Decoração" />
+    </header>
+
+    <main class="card" role="main">
+      <h1>Consulta de Preço por Tamanho</h1>
+
+      <label for="sizeSelect">Selecione o tamanho</label>
+      <select id="sizeSelect" disabled>
+        <option value="">Carregando tamanhos...</option>
+      </select>
+
+      <div class="result" aria-live="polite">
+        <div class="k">Preço</div>
+        <div class="v" id="priceValue">R$ 0,00</div>
+      </div>
+
+      <div class="error" id="errorBox"></div>
+      <div class="hint">Os preços são carregados automaticamente de <strong>precos.csv</strong>.</div>
+    </main>
+
+    <footer>Idealize Decoração</footer>
+  </div>
+
+  <script>
+    // Fonte única de preços: precos.csv (carregado dinamicamente)
+    const CSV_PATH = "./precos.csv";
+
+    const sizeSelect = document.getElementById("sizeSelect");
+    const priceValue = document.getElementById("priceValue");
+    const errorBox = document.getElementById("errorBox");
+
+    const brl = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+
+    function showError(message){
+      errorBox.style.display = "block";
+      errorBox.textContent = message;
+    }
+    function clearError(){
+      errorBox.style.display = "none";
+      errorBox.textContent = "";
+    }
+
+    function normalizeSize(s){
+      return String(s ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "");
+    }
+
+    function parsePrice(raw){
+      // Aceita números puros (ex: 155), ou formatos comuns (ex: "R$ 155,00")
+      let s = String(raw ?? "").trim();
+
+      // remove tudo, exceto dígitos, ponto, vírgula e sinal de menos
+      s = s.replace(/[^0-9,\.\-]/g, "");
+
+      if (!s) return NaN;
+
+      const hasDot = s.includes(".");
+      const hasComma = s.includes(",");
+
+      if (hasDot && hasComma){
+        // ex: 1.234,56
+        s = s.replace(/\./g, "").replace(",", ".");
+      } else if (hasComma && !hasDot){
+        // ex: 155,00
+        s = s.replace(",", ".");
+      }
+      const n = Number.parseFloat(s);
+      return Number.isFinite(n) ? n : NaN;
+    }
+
+    function detectDelimiter(firstLine){
+      const candidates = [";", ",", "\t"];
+      let best = { d: ";", count: -1 };
+      for (const d of candidates){
+        const count = firstLine.split(d).length - 1;
+        if (count > best.count) best = { d, count };
+      }
+      return best.d;
+    }
+
+    function parseCSV(text){
+      // Suporta BOM, delimitador ; ou , e aspas simples/duplas.
+      const cleaned = text.replace(/^\uFEFF/, "");
+      const lines = cleaned.split(/\r?\n/).filter(l => l.trim().length);
+      if (lines.length < 2) return [];
+
+      const delimiter = detectDelimiter(lines[0]);
+      const rows = [];
+
+      const splitLine = (line) => {
+        const out = [];
+        let cur = "";
+        let inQuotes = false;
+        let quoteChar = "";
+
+        for (let i = 0; i < line.length; i++){
+          const ch = line[i];
+
+          if ((ch === '"' || ch === "'")){
+            if (!inQuotes){
+              inQuotes = true;
+              quoteChar = ch;
+              continue;
+            } else if (ch === quoteChar){
+              // olha se é escape de aspas
+              const next = line[i+1];
+              if (next === quoteChar){
+                cur += quoteChar;
+                i++;
+                continue;
+              }
+              inQuotes = false;
+              quoteChar = "";
+              continue;
+            }
+          }
+
+          if (!inQuotes && (ch === delimiter)){
+            out.push(cur.trim());
+            cur = "";
+          } else {
+            cur += ch;
+          }
+        }
+        out.push(cur.trim());
+        return out;
+      };
+
+      const header = splitLine(lines[0]).map(h => h.toLowerCase().trim());
+      const idxSize = header.findIndex(h => ["tamanho","size","medida","dimensao","dimensão"].includes(h));
+      const idxPrice = header.findIndex(h => ["preco","preço","price","valor"].includes(h));
+
+      if (idxSize === -1 || idxPrice === -1){
+        throw new Error("Cabeçalho do CSV inválido. Esperado colunas 'tamanho' e 'preco'.");
+      }
+
+      for (let i = 1; i < lines.length; i++){
+        const cols = splitLine(lines[i]);
+        const size = cols[idxSize];
+        const price = parsePrice(cols[idxPrice]);
+
+        if (!size) continue;
+        if (!Number.isFinite(price)) continue;
+
+        rows.push({ size: String(size).trim(), price });
+      }
+      return rows;
+    }
+
+    function buildMap(rows){
+      const map = new Map();
+      for (const r of rows){
+        map.set(normalizeSize(r.size), { size: r.size, price: r.price });
+      }
+      return map;
+    }
+
+    function setPrice(price){
+      priceValue.textContent = brl.format(price);
+    }
+
+    async function loadPrices(){
+      clearError();
+
+      const res = await fetch(CSV_PATH, { cache: "no-store" });
+      if (!res.ok){
+        throw new Error("Não foi possível carregar 'precos.csv'. Verifique se o arquivo está no mesmo nível do index.html e se o GitHub Pages está ativo.");
+      }
+      const text = await res.text();
+      const rows = parseCSV(text);
+
+      if (!rows.length){
+        throw new Error("O CSV foi carregado, mas não contém linhas válidas (tamanho + preço).");
+      }
+      return rows;
+    }
+
+    function populateSelect(rows){
+      // Ordena por área (quando possível), senão por texto
+      const parseDims = (s) => {
+        const m = String(s).toLowerCase().replace(/\s+/g,"").match(/(\d+(?:[\.,]\d+)?)x(\d+(?:[\.,]\d+)?)/);
+        if (!m) return null;
+        const a = Number(m[1].replace(",", "."));
+        const b = Number(m[2].replace(",", "."));
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+        return { a, b, area: a*b };
+      };
+
+      rows.sort((r1, r2) => {
+        const d1 = parseDims(r1.size);
+        const d2 = parseDims(r2.size);
+        if (d1 && d2) return d1.area - d2.area;
+        return String(r1.size).localeCompare(String(r2.size), "pt-BR");
+      });
+
+      sizeSelect.innerHTML = '<option value="">Selecione...</option>';
+      for (const r of rows){
+        const opt = document.createElement("option");
+        opt.value = normalizeSize(r.size);
+        opt.textContent = r.size;
+        sizeSelect.appendChild(opt);
+      }
+      sizeSelect.disabled = false;
+    }
+
+    (async function init(){
+      try{
+        const rows = await loadPrices();
+        const priceMap = buildMap(rows);
+
+        populateSelect(rows);
+        setPrice(0);
+
+        sizeSelect.addEventListener("change", () => {
+          const key = sizeSelect.value;
+          if (!key){
+            setPrice(0);
+            return;
+          }
+          const found = priceMap.get(key);
+          if (!found){
+            setPrice(0);
+            showError("Tamanho não encontrado no CSV. Verifique se o valor no arquivo está igual ao exibido no seletor.");
+            return;
+          }
+          clearError();
+          setPrice(found.price);
+        });
+      } catch (err){
+        sizeSelect.disabled = true;
+        sizeSelect.innerHTML = '<option value="">Erro ao carregar</option>';
+        setPrice(0);
+        showError(String(err?.message ?? err));
+      }
+    })();
+  </script>
+</body>
+</html>
